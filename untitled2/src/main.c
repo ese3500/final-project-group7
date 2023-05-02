@@ -18,7 +18,7 @@
 #define MAX_INTERVAL_MS 50 // maximum interval in milliseconds between array indexing
 
 #define OCR1A_VALUE 936
-#define TRACK_LENGTH 432 // ~450~500 maximum on mega
+#define TRACK_LENGTH 432 // ~450~500 maximum on mega 3604 to 3605 border for compile error
 
 volatile int count = 0;
 volatile int targetCount = 0;
@@ -31,7 +31,8 @@ volatile int record3_armed = 0;
 volatile int record3 = 0;
 
 volatile int playTrack = 0;
-
+volatile int metronome_on = 0;
+volatile int playback = 1;
 //int track1[20][3] = {
 //        {0x93, 0x24, 0x40} ,
 //        {0x00, 0x00, 0x00} ,
@@ -46,7 +47,7 @@ volatile int playTrack = 0;
 int track1[TRACK_LENGTH][3];
 int track2[TRACK_LENGTH][3];
 int track3[TRACK_LENGTH][3];
-volatile int step = 0; // volatile?
+volatile uint32_t step = 0; // volatile?
 
 // timing stuff
 // TNCT0 counts from 0 to OCR0A and move onto the next
@@ -66,7 +67,6 @@ ISR(PCINT2_vect) {
             record3_armed = 1;
             PORTG |= (1 << PG5);
         }
-
         if (PINK & (1 << PINK3)) {
             // reset
             // clear tracks
@@ -87,22 +87,18 @@ ISR(PCINT2_vect) {
                 track3[i][2] = 0;
             }
         }
-        if (PINK & (2 << PINK4)) {
-
+        if (PINK & (1 << PINK4)) {
+            // playback
+            playback = playback ? 0 : 1;
         }
-        // UNO code
-//        if (PINB & (1 << PINB0)) {
-//            record1_armed = 1;
-//            PORTD |= (1 << PORTD2); // on
-//        }
-//        if (PINB & (1 << PINB1)) {
-//            record2_armed = 1;
-//            PORTD |= (1 << PORTD3); // on
-//        }
-//        if (PINB & (1 << PINB2)) {
-//            record3_armed = 1;
-//            PORTD |= (1 << PORTD4); // on
-//        }
+        if (PINK & (1 << PINK5)) {
+            // metronome buzzer
+            if (metronome_on == 0) {
+                metronome_on = 1;
+            } else {
+                metronome_on = 0;
+            }
+        }
 }
 
 
@@ -154,9 +150,17 @@ void Initialize() {
     PCMSK2 |= (1<<PCINT20);
     PCICR |= (1<<PCIE2);
 
-    // METRONOME
+    // METRONOME LED
     DDRH |= (1 << DDH3);
-
+    DDRH |= (1 << DDH4);
+    DDRH |= (1 << DDH5);
+    DDRH |= (1 << DDH6);
+    // METRONOME BUZZER: button output pin with pin change interrupt
+    DDRK &= ~(1 << DDK5); // set A13 PK5 as output
+    PORTK |= (1<<PK5);
+    PCMSK2 |= (1 << PCINT21);
+    PCICR |= (1<<PCIE2);
+    DDRB |= (1<<DDB4); // PWM 10 PB4 set as output
 
     // TEST: Analog on Mega as Digital
     // A8 PK0 PCINT 16
@@ -230,7 +234,7 @@ void process_midi_message(uint8_t status_byte, uint8_t data_byte1, uint8_t data_
 
     if (message_type >> 4 == 9 || message_type >> 4 == 8) {
         // note on message
-        char printData[25];
+//        char printData[25];
 //        sprintf(printData, "ON: %X %X %X\n", status_byte, data_byte1, data_byte2);
 //        UART_putstring(printData);
 
@@ -374,8 +378,14 @@ long map(long x, long in_min, long in_max, long out_min, long out_max) {
 ISR(ADC_vect) {
         int interval = map(ADC, 0, 1023, MIN_INTERVAL_MS, MAX_INTERVAL_MS);
         uint32_t OCR1A_uint = (uint32_t) OCR1A;
-        int ms = ((OCR1A_uint + 1) * 64 * 1000 / F_CPU); // 262 ms
-        targetCount = interval / ms;
+
+        int ms = ((OCR1A_uint + 1) * 64 * 1000 / F_CPU); // 3.748 ms ~ 3
+        targetCount = interval / ms; // min interval 5 / 3 = 1 ~ 2 counts 6 ms per step
+
+//        char printInterval[50];
+////        sprintf(printInterval, "ADC: %u, interval: %u, ms: %u, targetCount: %u\n",
+////                ADC, interval, ms, targetCount);
+////        UART_putstring(printInterval);
 }
 
 int main(void)
@@ -385,21 +395,50 @@ int main(void)
 
     while(1)
     {
+//        int test = 5/3;
+//        char printTest[25];
+//        sprintf(printTest, "TEST: %d", test);
+//        UART_putstring(printTest);
+//        _delay_ms(500);
+        // PLAY/PAUSE
+        while (!playback) {
+            // infinite
+        }
         // METRONOME
-        if (step == TRACK_LENGTH / 16) {
+        if (step == 0) {
             PORTH |= (1 << PH3);
-        }
-        if (step == TRACK_LENGTH / 16 + 3) {
+            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+        } else if (step == 2) {
             PORTH &= ~(1 << PH3);
+            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+        } else if (step == TRACK_LENGTH / 4) {
+            PORTH |= (1 << PH4);
+            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+        } else if (step == TRACK_LENGTH / 4 + 2) {
+            PORTH &= ~(1 << PH4);
+            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+        } else if (step == TRACK_LENGTH / 2) {
+            PORTH |= (1 << PH5);
+            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+        } else if (step == TRACK_LENGTH / 2 + 2) {
+            PORTH &= ~(1 << PH5);
+            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+        } else if (step == TRACK_LENGTH * 3 / 4) {
+            PORTH |= (1 << PH6);
+            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+        } else if (step == TRACK_LENGTH * 3 / 4 + 2) {
+            PORTH &= ~(1 << PH6);
+            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
         }
+
         // all prints
 //        char printAny[25];
 //        sprintf(printAny, "PRINT\n");
 //        UART_putstring(printAny);
         // STEP INCREMENT ISR
         if (playTrack) {
-            char printStep[100];
-//            sprintf(printStep, "LENGTH: %u, STEP: %u ADC: %u, OCR1A: %u count: %u targetCount: %u\n\n",
+//            char printStep[100];
+//            sprintf(printStep, "LENGTH: %u, STEP: %lu ADC: %u, OCR1A: %u count: %u targetCount: %u\n\n",
 //                    TRACK_LENGTH, step, ADC, OCR1A, count, targetCount);
 //            UART_putstring(printStep);
 //            char printRecord[100];
