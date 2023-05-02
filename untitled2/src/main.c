@@ -15,10 +15,10 @@
 #define BAUD_PRESCALER (((F_CPU / (BAUD_RATE * 16UL))) - 1)
 //#define BAUD_PRESCALER 31
 #define MIN_INTERVAL_MS 5 // minimum interval in milliseconds between array indexing
-#define MAX_INTERVAL_MS 250 // maximum interval in milliseconds between array indexing
+#define MAX_INTERVAL_MS 50 // maximum interval in milliseconds between array indexing
 
 #define OCR1A_VALUE 936
-#define TRACK_LENGTH 450 // ~450~500 maximum on mega
+#define TRACK_LENGTH 432 // ~450~500 maximum on mega
 
 volatile int count = 0;
 volatile int targetCount = 0;
@@ -65,6 +65,30 @@ ISR(PCINT2_vect) {
         if (PINK & (1 << PINK2)) {
             record3_armed = 1;
             PORTG |= (1 << PG5);
+        }
+
+        if (PINK & (1 << PINK3)) {
+            // reset
+            // clear tracks
+//            char printReset[25];
+//            sprintf(printReset, "RESET\n");
+//            UART_putstring(printReset);
+            step = 0;
+            count = 0;
+            for (int i=0; i < TRACK_LENGTH; i++) {
+                track1[i][0] = 0;
+                track1[i][1] = 0;
+                track1[i][2] = 0;
+                track2[i][0] = 0;
+                track2[i][1] = 0;
+                track2[i][2] = 0;
+                track3[i][0] = 0;
+                track3[i][1] = 0;
+                track3[i][2] = 0;
+            }
+        }
+        if (PINK & (2 << PINK4)) {
+
         }
         // UNO code
 //        if (PINB & (1 << PINB0)) {
@@ -116,6 +140,23 @@ void Initialize() {
     PORTK |= (1<<PK2);
     PCMSK2 |= (1<<PCINT18);
     PCICR |= (1<<PCIE2);
+
+    // RESET BUTTON
+    // A11
+    DDRK &= ~(1 << DDK3);
+    PORTK |= (1<<PK3);
+    PCMSK2 |= (1<<PCINT19);
+    PCICR |= (1<<PCIE2);
+    // PLAYBACK BUTTON
+    // A12
+    DDRK &= ~(1 << DDK4);
+    PORTK |= (1<<PK4);
+    PCMSK2 |= (1<<PCINT20);
+    PCICR |= (1<<PCIE2);
+
+    // METRONOME
+    DDRH |= (1 << DDH3);
+
 
     // TEST: Analog on Mega as Digital
     // A8 PK0 PCINT 16
@@ -344,6 +385,13 @@ int main(void)
 
     while(1)
     {
+        // METRONOME
+        if (step == TRACK_LENGTH / 16) {
+            PORTH |= (1 << PH3);
+        }
+        if (step == TRACK_LENGTH / 16 + 3) {
+            PORTH &= ~(1 << PH3);
+        }
         // all prints
 //        char printAny[25];
 //        sprintf(printAny, "PRINT\n");
