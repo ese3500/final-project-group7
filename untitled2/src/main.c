@@ -9,16 +9,20 @@
 #include <stdlib.h>
 #include <avr/interrupt.h>
 
+// 31250 bits / sec
+// byte = 8 bits
+// 3906.25 bytes / sec
+// 3.906 bytes / ms
 #define BAUD_RATE 31250
 
 // does prescaler need to change?
 #define BAUD_PRESCALER (((F_CPU / (BAUD_RATE * 16UL))) - 1)
 //#define BAUD_PRESCALER 31
 #define MIN_INTERVAL_MS 5 // minimum interval in milliseconds between array indexing
-#define MAX_INTERVAL_MS 50 // maximum interval in milliseconds between array indexing
+#define MAX_INTERVAL_MS 10 // maximum interval in milliseconds between array indexing
 
-#define OCR1A_VALUE 936
-#define TRACK_LENGTH 432 // ~450~500 maximum on mega 3604 to 3605 border for compile error
+#define OCR1A_VALUE 300 // 936
+#define TRACK_LENGTH 864 // ~450~500 maximum on mega 3604 to 3605 border for compile error
 
 volatile int count = 0;
 volatile int targetCount = 0;
@@ -33,6 +37,8 @@ volatile int record3 = 0;
 volatile int playTrack = 0;
 volatile int metronome_on = 0;
 volatile int playback = 1;
+volatile int panic = 0;
+int prev_step;
 //int track1[20][3] = {
 //        {0x93, 0x24, 0x40} ,
 //        {0x00, 0x00, 0x00} ,
@@ -44,9 +50,9 @@ volatile int playback = 1;
 //        {0x00, 0x00, 0x00} ,
 //        {0x00, 0x00, 0x00}
 //};
-int track1[TRACK_LENGTH][3];
-int track2[TRACK_LENGTH][3];
-int track3[TRACK_LENGTH][3];
+uint8_t track1[TRACK_LENGTH][3];
+uint8_t track2[TRACK_LENGTH][3];
+uint8_t track3[TRACK_LENGTH][3];
 volatile uint32_t step = 0; // volatile?
 
 // timing stuff
@@ -56,6 +62,9 @@ volatile uint32_t step = 0; // volatile?
 ISR(PCINT2_vect) {
         // MEGA code
         if (PINK & (1 << PINK0)) {
+//            char printReset[25];
+//            sprintf(printReset, "RECORD1 ISR\n");
+//            UART_putstring(printReset);
             record1_armed = 1;
             PORTE |= (1 << PE4);
         }
@@ -76,16 +85,34 @@ ISR(PCINT2_vect) {
             step = 0;
             count = 0;
             for (int i=0; i < TRACK_LENGTH; i++) {
+                if (track1[i][0] >> 4 == 8) {
+                    UART_send(track1[i][0]);
+                    UART_send(track1[i][1]);
+                    UART_send(track1[i][2]);
+                }
                 track1[i][0] = 0;
                 track1[i][1] = 0;
                 track1[i][2] = 0;
+                if (track2[i][0] >> 4 == 8) {
+                    UART_send(track2[i][0]);
+                    UART_send(track2[i][1]);
+                    UART_send(track2[i][2]);
+                }
                 track2[i][0] = 0;
                 track2[i][1] = 0;
                 track2[i][2] = 0;
+                if (track3[i][0] >> 4 == 8) {
+                    UART_send(track3[i][0]);
+                    UART_send(track3[i][1]);
+                    UART_send(track3[i][2]);
+                }
                 track3[i][0] = 0;
                 track3[i][1] = 0;
                 track3[i][2] = 0;
             }
+            // send panic signal to stop all notes that are playing
+            // reset LEDs
+
         }
         if (PINK & (1 << PINK4)) {
             // playback
@@ -93,6 +120,9 @@ ISR(PCINT2_vect) {
         }
         if (PINK & (1 << PINK5)) {
             // metronome buzzer
+//            char printISR[25];
+//            sprintf(printISR, "IN ISR\n");
+//            UART_putstring(printISR);
             if (metronome_on == 0) {
                 metronome_on = 1;
             } else {
@@ -111,8 +141,11 @@ void Initialize() {
 
     // set up LEDs as output
     DDRE |= (1 << DDE4); // channel 1 LED PWM2 PE4
+    PORTE &= ~(1 << PE4);
     DDRE |= (1 << DDE5); // channel 2 LED PWM3 PE5
+    PORTE &= ~(1 << PE5);
     DDRG |= (1 << DDG5); // channel 3 LED PWM4 PG5
+    PORTG &= ~(1 << PG5);
     DDRE |= (1 << DDE3); // set up recording LED Pin 5 PWM5 PE3
 
     // SET UP BUTTONS AND PCINT MEGA
@@ -155,6 +188,7 @@ void Initialize() {
     DDRH |= (1 << DDH4);
     DDRH |= (1 << DDH5);
     DDRH |= (1 << DDH6);
+
     // METRONOME BUZZER: button output pin with pin change interrupt
     DDRK &= ~(1 << DDK5); // set A13 PK5 as output
     PORTK |= (1<<PK5);
@@ -323,9 +357,10 @@ ISR(TIMER1_COMPA_vect) {
 //    char printCount[25];
 //    sprintf(printCount, "STEP: %d\n", step);
 //    UART_putstring(printCount);
+
         if (count >= targetCount) {
             // Timer1 compare interrupt service routine
-            if (step == 0 && (record1_armed || record2_armed || record3_armed)) {
+            if (step == TRACK_LENGTH - 10 && (record1_armed || record2_armed || record3_armed)) {
 //            char printArm[25];
 //            sprintf(printArm, "RECORD START");
 //            UART_putstring(printArm);
@@ -334,7 +369,7 @@ ISR(TIMER1_COMPA_vect) {
                 record3 = record3_armed ? 1 : 0;
                 // turn on record light
                 PORTE |= (1 << PORTE3); // but this turns on when we go from step 0 to 1 for some reason
-            } else if (step == (TRACK_LENGTH - 1) && (record1 == 1 || record2 == 1 || record3 == 1)) {
+            } else if (step == (TRACK_LENGTH - 11) && (record1 == 1 || record2 == 1 || record3 == 1)) {
 //            char printStop[25];
 //            sprintf(printStop, "RECORDS STOP");
 //            UART_putstring(printStop);
@@ -364,6 +399,47 @@ ISR(TIMER1_COMPA_vect) {
             }
 
             count = 0;
+
+            // METRONOME
+            // track length is 864 [0, 863]
+            // 864 / 16 = 54
+            if (step < TRACK_LENGTH / 4) {
+                if (step % (TRACK_LENGTH / 16) == 0) {
+                    PORTH |= (1 << PH3);
+                    if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+                    prev_step = step;
+                } else if (step >= prev_step+5) {
+                    PORTH &= ~(1 << PH3); // led off
+                    if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+                }
+            } else if (step < TRACK_LENGTH / 2) {
+                if (step % (TRACK_LENGTH / 16) == 0) {
+                    PORTH |= (1 << PH4);
+                    if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+                    prev_step = step;
+                } else if (step >= prev_step+5) {
+                    PORTH &= ~(1 << PH4);
+                    if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+                }
+            } else if (step < TRACK_LENGTH * 3 / 4) {
+                if (step % (TRACK_LENGTH / 16) == 0) {
+                    PORTH |= (1 << PH5);
+                    if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+                    prev_step = step;
+                } else if (step >= prev_step+5) {
+                    PORTH &= ~(1 << PH5);
+                    if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+                }
+            } else if (step <TRACK_LENGTH) {
+                if (step % (TRACK_LENGTH / 16) == 0) {
+                    PORTH |= (1 << PH6);
+                    if (metronome_on) PORTB |= (1 << PB4);// buzzer on
+                    prev_step = step;
+                } else if (step >= prev_step+5) {
+                    PORTH &= ~(1 << PH6);
+                    if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
+                }
+            }
         } else {
             count++;
         }
@@ -395,40 +471,19 @@ int main(void)
 
     while(1)
     {
-//        int test = 5/3;
 //        char printTest[25];
-//        sprintf(printTest, "TEST: %d", test);
+//        sprintf(printTest, "METRONOME ON: %d\n", metronome_on);
 //        UART_putstring(printTest);
-//        _delay_ms(500);
         // PLAY/PAUSE
+//        if (panic) {
+//            UART_send(0xFE);
+//            UART_send(0xFE);
+//            UART_send(0xFE);
+//            UART_send(0x79);
+//            panic = 0;
+//        }
         while (!playback) {
             // infinite
-        }
-        // METRONOME
-        if (step == 0) {
-            PORTH |= (1 << PH3);
-            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
-        } else if (step == 2) {
-            PORTH &= ~(1 << PH3);
-            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
-        } else if (step == TRACK_LENGTH / 4) {
-            PORTH |= (1 << PH4);
-            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
-        } else if (step == TRACK_LENGTH / 4 + 2) {
-            PORTH &= ~(1 << PH4);
-            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
-        } else if (step == TRACK_LENGTH / 2) {
-            PORTH |= (1 << PH5);
-            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
-        } else if (step == TRACK_LENGTH / 2 + 2) {
-            PORTH &= ~(1 << PH5);
-            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
-        } else if (step == TRACK_LENGTH * 3 / 4) {
-            PORTH |= (1 << PH6);
-            if (metronome_on) PORTB |= (1 << PB4);// buzzer on
-        } else if (step == TRACK_LENGTH * 3 / 4 + 2) {
-            PORTH &= ~(1 << PH6);
-            if (metronome_on) PORTB &= ~(1 << PB4); // buzzer off
         }
 
         // all prints
