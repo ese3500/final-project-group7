@@ -1,5 +1,5 @@
 # JGL MIDI Looper created by Kat and Jun
-ESE 3500 Final Project Group 7
+## ESE 3500 Final Project Group 7
 
 To run the code, set up a project for Arduino Mega and import the code. When flashing, disconnect the receive port wire and reconnect after build is complete. 
 
